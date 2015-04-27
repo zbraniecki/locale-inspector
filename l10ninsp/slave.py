@@ -14,7 +14,9 @@ import codecs
 from collections import defaultdict
 import os
 from Mozilla.Paths import EnumerateSourceTreeApp
-from Mozilla.CompareLocales import compareApp, compareDirs
+from Mozilla.CompareLocales import compareApp
+import subprocess
+import json
 
 class intdict(defaultdict):
     def __init__(self):
@@ -91,9 +93,16 @@ class InspectCommand(Command):
     try:
         if gather_stats:
             self.sendStatus({'stats': stats})
-        self.sendStatus({'stdout': codecs.utf_8_encode(o.serialize())[0],
-                         'result': dict(summary=dict(summary),
-                                        details=o.details.toJSON())})
+        if type(o) is dict:
+            # compare-locales.js mode
+            self.sendStatus({'stdout': json.dumps(o, indent=1),
+                             'result': dict(summary=dict(summary),
+                                            details=o['details'])})
+        else:
+            # compare-locales mode
+            self.sendStatus({'stdout': codecs.utf_8_encode(o.serialize())[0],
+                             'result': dict(summary=dict(summary),
+                                            details=o.details.toJSON())})
     except Exception, e:
       log.msg('%s status sending failed with %s' % (locale, str(e)))
     pass
@@ -123,6 +132,22 @@ class InspectCommand(Command):
       rc = FAILURE
     self.sendStatus({'rc': rc})
 
+def compareDirs(path1, path2):
+    curPath = os.path.dirname(os.path.abspath(__file__))
+    vendorLocalPath = os.path.join(curPath, '..', '..')
+    cljsPath = os.path.join(vendorLocalPath, 'compare-locales.js')
+    # node ./bin/compare-dirs-compat.js
+    #   --data=json ./workdir/en-US ./workdir/ab-CD
+    process = subprocess.Popen(
+      ["node",
+       cljsPath + "/bin/compare-dirs.js",
+       "--data=json",
+       path1,
+       path2], stdout=subprocess.PIPE)
+    output, unused_err = process.communicate()
+    process.poll()
+    return json.loads(output)
+
 class InspectDirsCommand(InspectCommand):
   """Subclass InspectCommand to only compare two directories.
 
@@ -135,20 +160,18 @@ class InspectDirsCommand(InspectCommand):
   def _compare(self, workingdir, locale, gather_stats, args):
     """Overload _compare to call compareDirs."""
     ref, l10n = (self.args[k] for k in ('refpath', 'l10npath'))
-    obs = stats = None
+    obs = None
     if gather_stats:
       obs = Observer()
     log.msg(workingdir, ref, l10n)
     o = compareDirs(os.path.join(workingdir, ref),
-                    os.path.join(workingdir, l10n),
-                    otherObserver = obs)
+                    os.path.join(workingdir, l10n))
     try:
-        summary = o.summary.values()[0]
+        summary = o['summary']['null']
     except:
         log.msg("Couldn't get summary")
         summary = {}
-    if gather_stats:
-      stats = obs.dict()
+    stats = {}
     return o, summary, stats
 
 
